@@ -85,6 +85,13 @@ export async function appendDriveHistory(item: DriveHistoryItem): Promise<void> 
   await FileSystem.writeAsStringAsync(HISTORY_FILE, JSON.stringify(next));
 }
 
+export async function exportDriveHistoryJson(): Promise<string> {
+  const current = await loadDriveHistory();
+  const exportPath = `${FileSystem.documentDirectory ?? ''}drive-history-export-${Date.now()}.json`;
+  await FileSystem.writeAsStringAsync(exportPath, JSON.stringify(current, null, 2));
+  return exportPath;
+}
+
 export async function loadSessionSnapshot(): Promise<SessionSnapshot | null> {
   try {
     const info = await FileSystem.getInfoAsync(SESSION_SNAPSHOT_FILE);

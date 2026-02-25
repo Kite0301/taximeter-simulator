@@ -26,6 +26,7 @@ import {
   appendDriveHistory,
   clearSessionSnapshot,
   DriveHistoryItem,
+  exportDriveHistoryJson,
   loadDriveHistory,
   loadSessionSnapshot,
   PauseLog,
@@ -556,6 +557,11 @@ export default function App() {
     );
   }
 
+  async function exportHistory() {
+    const exportedPath = await exportDriveHistoryJson();
+    setErrorMessage(`履歴JSONを書き出しました: ${exportedPath}`);
+  }
+
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.safeArea}>
@@ -756,6 +762,12 @@ export default function App() {
           ) : null}
           <View style={styles.historyCard}>
             <Text style={styles.label}>運転履歴</Text>
+            <Pressable
+              onPress={exportHistory}
+              style={({ pressed }) => [styles.exportButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.exportButtonText}>履歴をJSONエクスポート</Text>
+            </Pressable>
             {historyItems.length === 0 ? (
               <Text style={styles.meta}>履歴はまだありません</Text>
             ) : (
@@ -1001,6 +1013,19 @@ const styles = StyleSheet.create({
   rulesButtonText: {
     color: '#fee2e2',
     fontSize: 13,
+    fontWeight: '700',
+  },
+  exportButton: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    backgroundColor: '#1e3a8a',
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  exportButtonText: {
+    color: '#dbeafe',
+    fontSize: 12,
     fontWeight: '700',
   },
   error: {
