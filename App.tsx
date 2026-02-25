@@ -1,6 +1,8 @@
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AppState,
+  AppStateStatus,
   Platform,
   Pressable,
   ScrollView,
@@ -36,6 +38,7 @@ import { LatLng } from './src/lib/types';
 type PermissionState = 'unknown' | 'granted' | 'denied';
 type BillingMode = 'distance' | 'time' | 'unknown';
 type SessionState = 'idle' | 'running' | 'paused';
+type LocationProfile = 'high' | 'balanced';
 
 const LOCATION_UPDATE_INTERVAL_MS = 1000;
 const EDGE_PADDING = 16;
@@ -43,6 +46,8 @@ const LANDSCAPE_SIDE_PADDING = 22;
 const MAX_REASONABLE_SPEED_KMH = 180;
 const POOR_ACCURACY_METERS = 80;
 const MAX_DISTANCE_FACTOR_KM_PER_SEC = (MAX_REASONABLE_SPEED_KMH / 3600) * 1.5;
+const PROFILE_SWITCH_TO_BALANCED_KMH = 12;
+const PROFILE_SWITCH_TO_HIGH_KMH = 20;
 
 function getNoisySampleReason(params: {
   deltaKm: number;
@@ -94,6 +99,8 @@ export default function App() {
   const [restorableSnapshot, setRestorableSnapshot] = useState<SessionSnapshot | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
+  const [locationProfile, setLocationProfile] = useState<LocationProfile>('high');
+  const [autoPausedByBackground, setAutoPausedByBackground] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const watchSub = useRef<Location.LocationSubscription | null>(null);
@@ -109,6 +116,8 @@ export default function App() {
   const pauseLogsRef = useRef<PauseLog[]>([]);
   const pauseStartedAtRef = useRef<number | null>(null);
   const lastSnapshotSavedAtMsRef = useRef(0);
+  const locationProfileRef = useRef<LocationProfile>('high');
+  const profileRestartingRef = useRef(false);
 
   const selectedPreset = useMemo(
     () => getPresetById(selectedPresetId),
@@ -161,6 +170,18 @@ export default function App() {
     filteredSamples,
   ]);
 
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      if (nextState !== 'active' && sessionState === 'running') {
+        enterPausedState('background');
+      }
+    });
+
+    return () => {
+      sub.remove();
+    };
+  }, [sessionState]);
+
   async function requestLocationPermission(): Promise<boolean> {
     const current = await Location.getForegroundPermissionsAsync();
     if (current.status === 'granted') {
@@ -188,6 +209,8 @@ export default function App() {
     setBillingMode('unknown');
     setAcceptedSamples(0);
     setFilteredSamples(0);
+    setLocationProfile('high');
+    setAutoPausedByBackground(false);
     fareRuntimeRef.current = createFareRuntime(preset);
     elapsedAccumulatedMsRef.current = 0;
     runningSegmentStartMsRef.current = null;
@@ -196,6 +219,8 @@ export default function App() {
     sessionEventsRef.current = [];
     pauseLogsRef.current = [];
     pauseStartedAtRef.current = null;
+    locationProfileRef.current = 'high';
+    profileRestartingRef.current = false;
     lastPoint.current = null;
     lastSampleTimeMs.current = null;
   }
@@ -217,6 +242,7 @@ export default function App() {
   function stopSession() {
     stopLocationWatch();
     stopElapsedTimer();
+    profileRestartingRef.current = false;
   }
 
   function startElapsedTimer() {
@@ -228,14 +254,28 @@ export default function App() {
     }, 250);
   }
 
-  async function startLocationWatch() {
+  function getLocationWatchOptions(profile: LocationProfile): Location.LocationOptions {
+    if (profile === 'balanced') {
+      return {
+        accuracy: Location.Accuracy.Balanced,
+        timeInterval: 2000,
+        distanceInterval: 3,
+      };
+    }
+    return {
+      accuracy: Location.Accuracy.BestForNavigation,
+      timeInterval: LOCATION_UPDATE_INTERVAL_MS,
+      distanceInterval: 1,
+    };
+  }
+
+  async function startLocationWatch(profile: LocationProfile = locationProfileRef.current) {
     stopLocationWatch();
+    locationProfileRef.current = profile;
+    setLocationProfile(profile);
+
     watchSub.current = await Location.watchPositionAsync(
-      {
-        accuracy: Location.Accuracy.BestForNavigation,
-        timeInterval: LOCATION_UPDATE_INTERVAL_MS,
-        distanceInterval: 1,
-      },
+      getLocationWatchOptions(profile),
       (loc) => {
         const nextPoint: LatLng = {
           latitude: loc.coords.latitude,
@@ -294,6 +334,21 @@ export default function App() {
           setBillingMode(
             currentSpeedKmh <= selectedPreset.lowSpeedThresholdKmh ? 'time' : 'distance'
           );
+
+          const desiredProfile =
+            currentSpeedKmh <= PROFILE_SWITCH_TO_BALANCED_KMH ? 'balanced' :
+            currentSpeedKmh >= PROFILE_SWITCH_TO_HIGH_KMH ? 'high' :
+            locationProfileRef.current;
+
+          if (
+            desiredProfile !== locationProfileRef.current &&
+            !profileRestartingRef.current
+          ) {
+            profileRestartingRef.current = true;
+            void startLocationWatch(desiredProfile).finally(() => {
+              profileRestartingRef.current = false;
+            });
+          }
         }
 
         lastPoint.current = nextPoint;
@@ -342,7 +397,7 @@ export default function App() {
     lastSnapshotSavedAtMsRef.current = snapshot.savedAtMs;
   }
 
-  function enterPausedState() {
+  function enterPausedState(reason: 'manual' | 'background' = 'manual') {
     const now = Date.now();
     finalizeRunningSegment(now);
     stopSession();
@@ -350,6 +405,10 @@ export default function App() {
     pauseStartedAtRef.current = now;
     addSessionEvent('pause', now);
     setSessionState('paused');
+    if (reason === 'background') {
+      setAutoPausedByBackground(true);
+      setErrorMessage('バックグラウンド遷移を検出したため自動で一時停止しました。');
+    }
     void persistSessionSnapshot('paused');
   }
 
@@ -410,6 +469,7 @@ export default function App() {
     elapsedAccumulatedMsRef.current = 0;
     runningSegmentStartMsRef.current = start;
     setSessionState('running');
+    setAutoPausedByBackground(false);
     startElapsedTimer();
     await startLocationWatch();
     await persistSessionSnapshot('running');
@@ -434,6 +494,7 @@ export default function App() {
     lastPoint.current = null;
     lastSampleTimeMs.current = null;
     setSessionState('running');
+    setAutoPausedByBackground(false);
     startElapsedTimer();
     await startLocationWatch();
     await persistSessionSnapshot('running');
@@ -482,6 +543,7 @@ export default function App() {
     lastSampleTimeMs.current = null;
 
     setSessionState('paused');
+    setAutoPausedByBackground(false);
     setRestorableSnapshot(null);
     await persistSessionSnapshot('paused');
     setErrorMessage(
@@ -610,6 +672,12 @@ export default function App() {
                 <Text style={styles.logicLine}>
                   5. ノイズ除外: accepted={acceptedSamples} / filtered={filteredSamples}
                 </Text>
+                <Text style={styles.logicLine}>
+                  6. バックグラウンド遷移時は自動一時停止
+                </Text>
+                <Text style={styles.logicLine}>
+                  7. 省電力プロファイル: {locationProfile === 'high' ? '高精度' : '省電力'}
+                </Text>
               </View>
             </View>
           ) : null}
@@ -651,7 +719,7 @@ export default function App() {
 
           {sessionState === 'running' ? (
             <Pressable
-              onPress={enterPausedState}
+              onPress={() => enterPausedState('manual')}
               style={({ pressed }) => [styles.button, styles.stopButton, pressed && styles.pressed]}
             >
               <Text style={styles.buttonText}>一時停止</Text>
@@ -675,7 +743,10 @@ export default function App() {
             </View>
           ) : null}
           {sessionState === 'paused' ? (
-            <Text style={styles.meta}>一時停止中: 再開で継続、終了でリセット</Text>
+            <Text style={styles.meta}>
+              一時停止中: 再開で継続、終了でリセット
+              {autoPausedByBackground ? '（バックグラウンド遷移により自動一時停止）' : ''}
+            </Text>
           ) : null}
           <View style={styles.historyCard}>
             <Text style={styles.label}>運転履歴</Text>
