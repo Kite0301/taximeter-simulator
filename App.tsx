@@ -173,8 +173,10 @@ export default function App() {
         <View style={styles.leftPane}>
           <Text style={styles.title}>TAXIMETER SIMULATOR</Text>
           <View style={styles.meterCard}>
-            <Text style={styles.label}>FARE</Text>
-            <Text style={styles.fare}>{formatYen(fareYen)}</Text>
+            <View style={styles.farePanel}>
+              <Text style={styles.label}>FARE</Text>
+              <Text style={styles.fare}>{formatYen(fareYen)}</Text>
+            </View>
 
             <View style={styles.statsRow}>
               <View style={styles.statBox}>
@@ -303,6 +305,17 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 12,
   },
+  farePanel: {
+    flex: 1,
+    minHeight: 180,
+    borderRadius: 10,
+    backgroundColor: '#04110a',
+    borderWidth: 1,
+    borderColor: '#14532d',
+    padding: 14,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  },
   statsRow: {
     flexDirection: 'row',
     gap: 10,
@@ -321,7 +334,7 @@ const styles = StyleSheet.create({
   },
   fare: {
     color: '#22c55e',
-    fontSize: 50,
+    fontSize: 76,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
