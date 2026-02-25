@@ -24,6 +24,7 @@ import { LatLng } from './src/lib/types';
 
 type PermissionState = 'unknown' | 'granted' | 'denied';
 type BillingMode = 'distance' | 'time' | 'unknown';
+type SessionState = 'idle' | 'running' | 'paused';
 
 const LOCATION_UPDATE_INTERVAL_MS = 1000;
 const EDGE_PADDING = 16;
@@ -31,7 +32,7 @@ const LANDSCAPE_SIDE_PADDING = 22;
 
 export default function App() {
   const [permission, setPermission] = useState<PermissionState>('unknown');
-  const [running, setRunning] = useState(false);
+  const [sessionState, setSessionState] = useState<SessionState>('idle');
   const [selectedPresetId, setSelectedPresetId] = useState(DEFAULT_FARE_PRESET.id);
   const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -46,6 +47,8 @@ export default function App() {
   const lastSampleTimeMs = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fareRuntimeRef = useRef(createFareRuntime(DEFAULT_FARE_PRESET));
+  const elapsedAccumulatedMsRef = useRef(0);
+  const runningSegmentStartMsRef = useRef<number | null>(null);
 
   const selectedPreset = useMemo(
     () => getPresetById(selectedPresetId),
@@ -84,37 +87,42 @@ export default function App() {
     setFareYen(preset.baseFareYen);
     setBillingMode('unknown');
     fareRuntimeRef.current = createFareRuntime(preset);
+    elapsedAccumulatedMsRef.current = 0;
+    runningSegmentStartMsRef.current = null;
     lastPoint.current = null;
     lastSampleTimeMs.current = null;
   }
 
-  function stopSession() {
+  function stopLocationWatch() {
     if (watchSub.current) {
       watchSub.current.remove();
       watchSub.current = null;
     }
+  }
+
+  function stopElapsedTimer() {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    setRunning(false);
-    setSpeedKmh(null);
   }
 
-  async function startSession() {
-    setErrorMessage(null);
-    const granted = await requestLocationPermission();
-    if (!granted) return;
+  function stopSession() {
+    stopLocationWatch();
+    stopElapsedTimer();
+  }
 
-    resetMeter(selectedPreset);
-    const start = Date.now();
-    setStartedAtMs(start);
-    setRunning(true);
-
+  function startElapsedTimer() {
+    stopElapsedTimer();
     timerRef.current = setInterval(() => {
-      setElapsedMs(Date.now() - start);
+      if (!runningSegmentStartMsRef.current) return;
+      const segmentElapsed = Date.now() - runningSegmentStartMsRef.current;
+      setElapsedMs(elapsedAccumulatedMsRef.current + segmentElapsed);
     }, 250);
+  }
 
+  async function startLocationWatch() {
+    stopLocationWatch();
     watchSub.current = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.BestForNavigation,
@@ -132,7 +140,7 @@ export default function App() {
           const deltaSeconds = Math.max(0.1, (loc.timestamp - lastSampleTimeMs.current) / 1000);
           const rawSpeedKmh = (loc.coords.speed ?? 0) * 3.6;
           const fallbackSpeedKmh = deltaSeconds > 0 ? (deltaKm / deltaSeconds) * 3600 : 0;
-          const speedKmh = rawSpeedKmh > 0 ? rawSpeedKmh : fallbackSpeedKmh;
+          const currentSpeedKmh = rawSpeedKmh > 0 ? rawSpeedKmh : fallbackSpeedKmh;
 
           if (deltaKm > 0) {
             setDistanceKm((prev) => prev + deltaKm);
@@ -143,14 +151,14 @@ export default function App() {
             runtime: fareRuntimeRef.current,
             deltaDistanceKm: Math.max(0, deltaKm),
             deltaSeconds,
-            speedKmh,
+            speedKmh: currentSpeedKmh,
           });
 
           fareRuntimeRef.current = nextRuntime;
           setFareYen(nextRuntime.fareYen);
-          setSpeedKmh(speedKmh);
+          setSpeedKmh(currentSpeedKmh);
           setBillingMode(
-            speedKmh <= selectedPreset.lowSpeedThresholdKmh ? 'time' : 'distance'
+            currentSpeedKmh <= selectedPreset.lowSpeedThresholdKmh ? 'time' : 'distance'
           );
         }
 
@@ -160,8 +168,56 @@ export default function App() {
     );
   }
 
-  const canStart = permission !== 'denied' && !running;
-  const canChangePreset = !running;
+  function finalizeRunningSegment(nowMs: number) {
+    if (!runningSegmentStartMsRef.current) return;
+    const segmentElapsed = nowMs - runningSegmentStartMsRef.current;
+    elapsedAccumulatedMsRef.current += Math.max(0, segmentElapsed);
+    runningSegmentStartMsRef.current = null;
+    setElapsedMs(elapsedAccumulatedMsRef.current);
+  }
+
+  function enterPausedState() {
+    const now = Date.now();
+    finalizeRunningSegment(now);
+    stopSession();
+    setSpeedKmh(null);
+    setSessionState('paused');
+  }
+
+  function finishSession() {
+    stopSession();
+    resetMeter(selectedPreset);
+    setSessionState('idle');
+  }
+
+  async function startSession() {
+    setErrorMessage(null);
+    const granted = await requestLocationPermission();
+    if (!granted) return;
+
+    resetMeter(selectedPreset);
+    const start = Date.now();
+    setStartedAtMs(start);
+    elapsedAccumulatedMsRef.current = 0;
+    runningSegmentStartMsRef.current = start;
+    setSessionState('running');
+    startElapsedTimer();
+    await startLocationWatch();
+  }
+
+  async function resumeSession() {
+    if (sessionState !== 'paused') return;
+    const now = Date.now();
+    runningSegmentStartMsRef.current = now;
+    lastPoint.current = null;
+    lastSampleTimeMs.current = null;
+    setSessionState('running');
+    startElapsedTimer();
+    await startLocationWatch();
+  }
+
+  const canStart = permission !== 'denied' && sessionState === 'idle';
+  const canChangePreset = sessionState === 'idle';
 
   function handlePresetChange(nextPresetId: string) {
     if (!canChangePreset) return;
@@ -235,7 +291,7 @@ export default function App() {
                 );
               })}
             </ScrollView>
-            <Text style={styles.meta}>走行中は切替不可</Text>
+            <Text style={styles.meta}>セッション中（計測中/一時停止中）は切替不可</Text>
           </View>
 
           <View style={styles.logicCard}>
@@ -256,7 +312,7 @@ export default function App() {
 
           {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
 
-          {!running ? (
+          {sessionState === 'idle' ? (
             <Pressable
               onPress={startSession}
               disabled={!canStart}
@@ -264,14 +320,36 @@ export default function App() {
             >
               <Text style={styles.buttonText}>運転開始</Text>
             </Pressable>
-          ) : (
+          ) : null}
+
+          {sessionState === 'running' ? (
             <Pressable
-              onPress={stopSession}
+              onPress={enterPausedState}
               style={({ pressed }) => [styles.button, styles.stopButton, pressed && styles.pressed]}
             >
-              <Text style={styles.buttonText}>停止</Text>
+              <Text style={styles.buttonText}>一時停止</Text>
             </Pressable>
-          )}
+          ) : null}
+
+          {sessionState === 'paused' ? (
+            <View style={styles.pausedActionRow}>
+              <Pressable
+                onPress={resumeSession}
+                style={({ pressed }) => [styles.button, styles.resumeButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.buttonText}>再開</Text>
+              </Pressable>
+              <Pressable
+                onPress={finishSession}
+                style={({ pressed }) => [styles.button, styles.stopButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.buttonText}>終了</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          {sessionState === 'paused' ? (
+            <Text style={styles.meta}>一時停止中: 再開で継続、終了でリセット</Text>
+          ) : null}
         </View>
       </View>
     </SafeAreaView>
@@ -415,9 +493,17 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingVertical: 16,
     alignItems: 'center',
+    flex: 1,
+  },
+  pausedActionRow: {
+    flexDirection: 'row',
+    gap: 10,
   },
   startButton: {
     backgroundColor: '#15803d',
+  },
+  resumeButton: {
+    backgroundColor: '#0369a1',
   },
   stopButton: {
     backgroundColor: '#b91c1c',
