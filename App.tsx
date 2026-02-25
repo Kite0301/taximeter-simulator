@@ -93,6 +93,7 @@ export default function App() {
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [restorableSnapshot, setRestorableSnapshot] = useState<SessionSnapshot | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const watchSub = useRef<Location.LocationSubscription | null>(null);
@@ -533,6 +534,30 @@ export default function App() {
         </View>
 
         <ScrollView style={styles.rightPane} contentContainerStyle={styles.rightPaneContent}>
+          <View style={styles.rulesCard}>
+            <Text style={styles.label}>利用ルール / 免責</Text>
+            {showDisclaimer ? (
+              <>
+                <Text style={styles.logicLine}>・本アプリはタクシー営業用途では利用できません。</Text>
+                <Text style={styles.logicLine}>・運転者本人が操作しないでください。</Text>
+                <Text style={styles.logicLine}>・表示される料金はあくまでシミュレーションです。</Text>
+                <Pressable
+                  onPress={() => setShowDisclaimer(false)}
+                  style={({ pressed }) => [styles.rulesButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.rulesButtonText}>確認して閉じる</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Pressable
+                onPress={() => setShowDisclaimer(true)}
+                style={({ pressed }) => [styles.rulesButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.rulesButtonText}>利用ルールを表示</Text>
+              </Pressable>
+            )}
+          </View>
+
           <Pressable
             onPress={() => setSettingsOpen((prev) => !prev)}
             style={({ pressed }) => [styles.settingsButton, pressed && styles.pressed]}
@@ -878,6 +903,28 @@ const styles = StyleSheet.create({
   historySub: {
     color: '#9ca3af',
     fontSize: 11,
+  },
+  rulesCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#7f1d1d',
+    backgroundColor: '#1f1111',
+    padding: 12,
+    gap: 6,
+  },
+  rulesButton: {
+    marginTop: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dc2626',
+    backgroundColor: '#7f1d1d',
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  rulesButtonText: {
+    color: '#fee2e2',
+    fontSize: 13,
+    fontWeight: '700',
   },
   error: {
     color: '#fca5a5',
