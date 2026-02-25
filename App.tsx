@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import {
   createFareRuntime,
@@ -227,9 +227,10 @@ export default function App() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" />
-      <View style={styles.container}>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.container}>
         <View style={styles.leftPane}>
           <Text style={styles.title}>TAXIMETER SIMULATOR</Text>
           <View style={styles.meterCard}>
@@ -351,8 +352,9 @@ export default function App() {
             <Text style={styles.meta}>一時停止中: 再開で継続、終了でリセット</Text>
           ) : null}
         </View>
-      </View>
-    </SafeAreaView>
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
