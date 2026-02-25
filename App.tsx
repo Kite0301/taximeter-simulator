@@ -20,6 +20,13 @@ import {
   updateFareBySegment,
 } from './src/lib/fare';
 import { distanceKmBetween, formatDuration } from './src/lib/geo';
+import {
+  appendDriveHistory,
+  DriveHistoryItem,
+  loadDriveHistory,
+  PauseLog,
+  SessionEvent,
+} from './src/lib/history';
 import { LatLng } from './src/lib/types';
 
 type PermissionState = 'unknown' | 'granted' | 'denied';
@@ -61,6 +68,11 @@ function getNoisySampleReason(params: {
   return null;
 }
 
+function formatLatLng(point: LatLng | null): string {
+  if (!point) return '-';
+  return `${point.latitude.toFixed(5)}, ${point.longitude.toFixed(5)}`;
+}
+
 export default function App() {
   const [permission, setPermission] = useState<PermissionState>('unknown');
   const [sessionState, setSessionState] = useState<SessionState>('idle');
@@ -73,6 +85,8 @@ export default function App() {
   const [billingMode, setBillingMode] = useState<BillingMode>('unknown');
   const [acceptedSamples, setAcceptedSamples] = useState(0);
   const [filteredSamples, setFilteredSamples] = useState(0);
+  const [historyItems, setHistoryItems] = useState<DriveHistoryItem[]>([]);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const watchSub = useRef<Location.LocationSubscription | null>(null);
@@ -82,6 +96,11 @@ export default function App() {
   const fareRuntimeRef = useRef(createFareRuntime(DEFAULT_FARE_PRESET));
   const elapsedAccumulatedMsRef = useRef(0);
   const runningSegmentStartMsRef = useRef<number | null>(null);
+  const firstAcceptedPointRef = useRef<LatLng | null>(null);
+  const lastAcceptedPointRef = useRef<LatLng | null>(null);
+  const sessionEventsRef = useRef<SessionEvent[]>([]);
+  const pauseLogsRef = useRef<PauseLog[]>([]);
+  const pauseStartedAtRef = useRef<number | null>(null);
 
   const selectedPreset = useMemo(
     () => getPresetById(selectedPresetId),
@@ -89,7 +108,16 @@ export default function App() {
   );
 
   useEffect(() => {
+    let active = true;
+    void (async () => {
+      const loaded = await loadDriveHistory();
+      if (active) {
+        setHistoryItems(loaded);
+      }
+    })();
+
     return () => {
+      active = false;
       stopSession();
     };
   }, []);
@@ -124,6 +152,11 @@ export default function App() {
     fareRuntimeRef.current = createFareRuntime(preset);
     elapsedAccumulatedMsRef.current = 0;
     runningSegmentStartMsRef.current = null;
+    firstAcceptedPointRef.current = null;
+    lastAcceptedPointRef.current = null;
+    sessionEventsRef.current = [];
+    pauseLogsRef.current = [];
+    pauseStartedAtRef.current = null;
     lastPoint.current = null;
     lastSampleTimeMs.current = null;
   }
@@ -199,6 +232,10 @@ export default function App() {
           }
 
           setAcceptedSamples((prev) => prev + 1);
+          if (!firstAcceptedPointRef.current) {
+            firstAcceptedPointRef.current = nextPoint;
+          }
+          lastAcceptedPointRef.current = nextPoint;
 
           if (deltaKm > 0) {
             setDistanceKm((prev) => prev + deltaKm);
@@ -234,15 +271,59 @@ export default function App() {
     setElapsedMs(elapsedAccumulatedMsRef.current);
   }
 
+  function addSessionEvent(type: SessionEvent['type'], atMs: number) {
+    sessionEventsRef.current = [...sessionEventsRef.current, { type, atMs }];
+  }
+
   function enterPausedState() {
     const now = Date.now();
     finalizeRunningSegment(now);
     stopSession();
     setSpeedKmh(null);
+    pauseStartedAtRef.current = now;
+    addSessionEvent('pause', now);
     setSessionState('paused');
   }
 
-  function finishSession() {
+  async function finishSession() {
+    const finishedAtMs = Date.now();
+    if (pauseStartedAtRef.current) {
+      pauseLogsRef.current = [
+        ...pauseLogsRef.current,
+        {
+          pausedAtMs: pauseStartedAtRef.current,
+          resumedAtMs: finishedAtMs,
+          durationMs: finishedAtMs - pauseStartedAtRef.current,
+        },
+      ];
+      pauseStartedAtRef.current = null;
+    }
+    addSessionEvent('finish', finishedAtMs);
+
+    if (startedAtMs) {
+      const record: DriveHistoryItem = {
+        id: `${startedAtMs}-${finishedAtMs}`,
+        createdAtMs: finishedAtMs,
+        startedAtMs,
+        finishedAtMs,
+        elapsedMs: elapsedAccumulatedMsRef.current,
+        distanceKm,
+        fareYen,
+        presetId: selectedPreset.id,
+        from: firstAcceptedPointRef.current,
+        to: lastAcceptedPointRef.current,
+        acceptedSamples,
+        filteredSamples,
+        distanceChargeSteps: fareRuntimeRef.current.distanceChargeSteps,
+        timeChargeSteps: fareRuntimeRef.current.timeChargeSteps,
+        pauseLogs: pauseLogsRef.current,
+        events: sessionEventsRef.current,
+      };
+
+      await appendDriveHistory(record);
+      setHistoryItems((prev) => [record, ...prev].slice(0, 100));
+    }
+
     stopSession();
     resetMeter(selectedPreset);
     setSessionState('idle');
@@ -256,6 +337,7 @@ export default function App() {
     resetMeter(selectedPreset);
     const start = Date.now();
     setStartedAtMs(start);
+    addSessionEvent('start', start);
     elapsedAccumulatedMsRef.current = 0;
     runningSegmentStartMsRef.current = start;
     setSessionState('running');
@@ -266,6 +348,18 @@ export default function App() {
   async function resumeSession() {
     if (sessionState !== 'paused') return;
     const now = Date.now();
+    if (pauseStartedAtRef.current) {
+      pauseLogsRef.current = [
+        ...pauseLogsRef.current,
+        {
+          pausedAtMs: pauseStartedAtRef.current,
+          resumedAtMs: now,
+          durationMs: now - pauseStartedAtRef.current,
+        },
+      ];
+      pauseStartedAtRef.current = null;
+    }
+    addSessionEvent('resume', now);
     runningSegmentStartMsRef.current = now;
     lastPoint.current = null;
     lastSampleTimeMs.current = null;
@@ -326,7 +420,7 @@ export default function App() {
           </View>
         </View>
 
-        <View style={styles.rightPane}>
+        <ScrollView style={styles.rightPane} contentContainerStyle={styles.rightPaneContent}>
           <View style={styles.presetCard}>
             <Text style={styles.label}>料金プリセット</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetRow}>
@@ -412,7 +506,43 @@ export default function App() {
           {sessionState === 'paused' ? (
             <Text style={styles.meta}>一時停止中: 再開で継続、終了でリセット</Text>
           ) : null}
-        </View>
+          <View style={styles.historyCard}>
+            <Text style={styles.label}>運転履歴</Text>
+            {historyItems.length === 0 ? (
+              <Text style={styles.meta}>履歴はまだありません</Text>
+            ) : (
+              historyItems.slice(0, 8).map((item) => {
+                const expanded = expandedHistoryId === item.id;
+                return (
+                  <Pressable
+                    key={item.id}
+                    onPress={() => setExpandedHistoryId((prev) => (prev === item.id ? null : item.id))}
+                    style={({ pressed }) => [styles.historyRow, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.historyMain}>
+                      {new Date(item.startedAtMs).toLocaleString()} / {item.distanceKm.toFixed(2)}km / {formatYen(item.fareYen)}
+                    </Text>
+                    {expanded ? (
+                      <View style={styles.historyDetail}>
+                        <Text style={styles.historySub}>from: {formatLatLng(item.from)}</Text>
+                        <Text style={styles.historySub}>to: {formatLatLng(item.to)}</Text>
+                        <Text style={styles.historySub}>
+                          charges: distance={item.distanceChargeSteps}, time={item.timeChargeSteps}
+                        </Text>
+                        <Text style={styles.historySub}>
+                          samples: accepted={item.acceptedSamples}, filtered={item.filteredSamples}
+                        </Text>
+                        <Text style={styles.historySub}>
+                          pauses: {item.pauseLogs.length}, events: {item.events.length}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                );
+              })
+            )}
+          </View>
+        </ScrollView>
         </View>
       </SafeAreaView>
     </SafeAreaProvider>
@@ -440,7 +570,10 @@ const styles = StyleSheet.create({
   },
   rightPane: {
     flex: 1,
+  },
+  rightPaneContent: {
     gap: 10,
+    paddingBottom: 12,
   },
   title: {
     color: '#9ca3af',
@@ -547,6 +680,35 @@ const styles = StyleSheet.create({
   logicLine: {
     color: '#d1d5db',
     fontSize: 13,
+  },
+  historyCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#374151',
+    backgroundColor: '#0b1220',
+    padding: 12,
+    gap: 8,
+  },
+  historyRow: {
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#374151',
+    backgroundColor: '#0f172a',
+    padding: 8,
+    gap: 4,
+  },
+  historyMain: {
+    color: '#e5e7eb',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  historyDetail: {
+    gap: 2,
+    marginTop: 2,
+  },
+  historySub: {
+    color: '#9ca3af',
+    fontSize: 11,
   },
   error: {
     color: '#fca5a5',

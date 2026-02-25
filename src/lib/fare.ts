@@ -14,6 +14,8 @@ export type FareRuntime = {
   baseDistanceRemainingKm: number;
   distanceRemainderKm: number;
   lowSpeedRemainderSeconds: number;
+  distanceChargeSteps: number;
+  timeChargeSteps: number;
   fareYen: number;
 };
 
@@ -53,6 +55,8 @@ export function createFareRuntime(preset: FarePreset): FareRuntime {
     baseDistanceRemainingKm: preset.baseDistanceKm,
     distanceRemainderKm: 0,
     lowSpeedRemainderSeconds: 0,
+    distanceChargeSteps: 0,
+    timeChargeSteps: 0,
     fareYen: preset.baseFareYen,
   };
 }
@@ -81,6 +85,7 @@ export function updateFareBySegment(params: {
     const timeSteps = Math.floor(next.lowSpeedRemainderSeconds / preset.lowSpeedStepSeconds);
     if (timeSteps > 0) {
       next.lowSpeedRemainderSeconds -= timeSteps * preset.lowSpeedStepSeconds;
+      next.timeChargeSteps += timeSteps;
       next.fareYen += timeSteps * preset.lowSpeedStepFareYen;
     }
     return next;
@@ -98,6 +103,7 @@ export function updateFareBySegment(params: {
     const distanceSteps = Math.floor(next.distanceRemainderKm / preset.distanceStepKm);
     if (distanceSteps > 0) {
       next.distanceRemainderKm -= distanceSteps * preset.distanceStepKm;
+      next.distanceChargeSteps += distanceSteps;
       next.fareYen += distanceSteps * preset.distanceStepFareYen;
     }
   }
