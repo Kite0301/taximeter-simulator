@@ -1,6 +1,7 @@
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -25,6 +26,8 @@ type PermissionState = 'unknown' | 'granted' | 'denied';
 type BillingMode = 'distance' | 'time' | 'unknown';
 
 const LOCATION_UPDATE_INTERVAL_MS = 1000;
+const EDGE_PADDING = 16;
+const LANDSCAPE_SIDE_PADDING = 22;
 
 export default function App() {
   const [permission, setPermission] = useState<PermissionState>('unknown');
@@ -267,11 +270,15 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#111827',
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight ?? 0) + EDGE_PADDING : EDGE_PADDING,
+    paddingBottom: EDGE_PADDING,
+    paddingLeft: LANDSCAPE_SIDE_PADDING,
+    paddingRight: LANDSCAPE_SIDE_PADDING,
   },
   container: {
     flex: 1,
     flexDirection: 'row',
-    padding: 14,
+    padding: 12,
     gap: 14,
   },
   leftPane: {
