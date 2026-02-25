@@ -1,10 +1,10 @@
-import { StatusBar } from 'expo-status-bar';
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Pressable,
   SafeAreaView,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   View,
@@ -165,7 +165,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="light" />
+      <StatusBar barStyle="light-content" />
       <View style={styles.container}>
         <View style={styles.leftPane}>
           <Text style={styles.title}>TAXIMETER SIMULATOR</Text>
