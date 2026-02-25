@@ -22,10 +22,14 @@ import {
 import { distanceKmBetween, formatDuration } from './src/lib/geo';
 import {
   appendDriveHistory,
+  clearSessionSnapshot,
   DriveHistoryItem,
   loadDriveHistory,
+  loadSessionSnapshot,
   PauseLog,
+  saveSessionSnapshot,
   SessionEvent,
+  SessionSnapshot,
 } from './src/lib/history';
 import { LatLng } from './src/lib/types';
 
@@ -87,6 +91,7 @@ export default function App() {
   const [filteredSamples, setFilteredSamples] = useState(0);
   const [historyItems, setHistoryItems] = useState<DriveHistoryItem[]>([]);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [restorableSnapshot, setRestorableSnapshot] = useState<SessionSnapshot | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const watchSub = useRef<Location.LocationSubscription | null>(null);
@@ -101,6 +106,7 @@ export default function App() {
   const sessionEventsRef = useRef<SessionEvent[]>([]);
   const pauseLogsRef = useRef<PauseLog[]>([]);
   const pauseStartedAtRef = useRef<number | null>(null);
+  const lastSnapshotSavedAtMsRef = useRef(0);
 
   const selectedPreset = useMemo(
     () => getPresetById(selectedPresetId),
@@ -111,8 +117,12 @@ export default function App() {
     let active = true;
     void (async () => {
       const loaded = await loadDriveHistory();
+      const snapshot = await loadSessionSnapshot();
       if (active) {
         setHistoryItems(loaded);
+        if (snapshot) {
+          setRestorableSnapshot(snapshot);
+        }
       }
     })();
 
@@ -121,6 +131,33 @@ export default function App() {
       stopSession();
     };
   }, []);
+
+  useEffect(() => {
+    if (sessionState === 'idle') {
+      void clearSessionSnapshot();
+      return;
+    }
+
+    const stateForSave: 'running' | 'paused' = sessionState === 'running' ? 'running' : 'paused';
+    void persistSessionSnapshot(stateForSave);
+    const timer = setInterval(() => {
+      void persistSessionSnapshot(stateForSave);
+    }, 5000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [
+    sessionState,
+    startedAtMs,
+    elapsedMs,
+    distanceKm,
+    fareYen,
+    billingMode,
+    selectedPresetId,
+    acceptedSamples,
+    filteredSamples,
+  ]);
 
   async function requestLocationPermission(): Promise<boolean> {
     const current = await Location.getForegroundPermissionsAsync();
@@ -275,6 +312,34 @@ export default function App() {
     sessionEventsRef.current = [...sessionEventsRef.current, { type, atMs }];
   }
 
+  function buildSessionSnapshot(state: 'running' | 'paused'): SessionSnapshot | null {
+    if (!startedAtMs) return null;
+    return {
+      savedAtMs: Date.now(),
+      sessionState: state,
+      startedAtMs,
+      elapsedMs: elapsedAccumulatedMsRef.current,
+      distanceKm,
+      fareYen,
+      billingMode,
+      selectedPresetId,
+      acceptedSamples,
+      filteredSamples,
+      fareRuntime: fareRuntimeRef.current,
+      from: firstAcceptedPointRef.current,
+      to: lastAcceptedPointRef.current,
+      pauseLogs: pauseLogsRef.current,
+      events: sessionEventsRef.current,
+    };
+  }
+
+  async function persistSessionSnapshot(state: 'running' | 'paused') {
+    const snapshot = buildSessionSnapshot(state);
+    if (!snapshot) return;
+    await saveSessionSnapshot(snapshot);
+    lastSnapshotSavedAtMsRef.current = snapshot.savedAtMs;
+  }
+
   function enterPausedState() {
     const now = Date.now();
     finalizeRunningSegment(now);
@@ -283,6 +348,7 @@ export default function App() {
     pauseStartedAtRef.current = now;
     addSessionEvent('pause', now);
     setSessionState('paused');
+    void persistSessionSnapshot('paused');
   }
 
   async function finishSession() {
@@ -324,6 +390,7 @@ export default function App() {
       setHistoryItems((prev) => [record, ...prev].slice(0, 100));
     }
 
+    await clearSessionSnapshot();
     stopSession();
     resetMeter(selectedPreset);
     setSessionState('idle');
@@ -343,6 +410,7 @@ export default function App() {
     setSessionState('running');
     startElapsedTimer();
     await startLocationWatch();
+    await persistSessionSnapshot('running');
   }
 
   async function resumeSession() {
@@ -366,6 +434,7 @@ export default function App() {
     setSessionState('running');
     startElapsedTimer();
     await startLocationWatch();
+    await persistSessionSnapshot('running');
   }
 
   const canStart = permission !== 'denied' && sessionState === 'idle';
@@ -376,6 +445,48 @@ export default function App() {
     const nextPreset = getPresetById(nextPresetId);
     setSelectedPresetId(nextPresetId);
     resetMeter(nextPreset);
+  }
+
+  async function discardRestorableSnapshot() {
+    setRestorableSnapshot(null);
+    await clearSessionSnapshot();
+  }
+
+  async function restoreFromSnapshot() {
+    if (!restorableSnapshot) return;
+    const granted = await requestLocationPermission();
+    if (!granted) return;
+
+    const preset = getPresetById(restorableSnapshot.selectedPresetId);
+    setSelectedPresetId(restorableSnapshot.selectedPresetId);
+    setStartedAtMs(restorableSnapshot.startedAtMs);
+    setElapsedMs(restorableSnapshot.elapsedMs);
+    setDistanceKm(restorableSnapshot.distanceKm);
+    setFareYen(restorableSnapshot.fareYen);
+    setBillingMode(restorableSnapshot.billingMode);
+    setAcceptedSamples(restorableSnapshot.acceptedSamples);
+    setFilteredSamples(restorableSnapshot.filteredSamples);
+    setSpeedKmh(null);
+
+    fareRuntimeRef.current = restorableSnapshot.fareRuntime;
+    elapsedAccumulatedMsRef.current = restorableSnapshot.elapsedMs;
+    runningSegmentStartMsRef.current = null;
+    firstAcceptedPointRef.current = restorableSnapshot.from;
+    lastAcceptedPointRef.current = restorableSnapshot.to;
+    pauseLogsRef.current = restorableSnapshot.pauseLogs;
+    sessionEventsRef.current = restorableSnapshot.events;
+    pauseStartedAtRef.current = null;
+    lastPoint.current = null;
+    lastSampleTimeMs.current = null;
+
+    setSessionState('paused');
+    setRestorableSnapshot(null);
+    await persistSessionSnapshot('paused');
+    setErrorMessage(
+      `中断セッションを復元しました（${preset.label} / ${new Date(
+        restorableSnapshot.startedAtMs
+      ).toLocaleString()}）`
+    );
   }
 
   return (
@@ -446,6 +557,29 @@ export default function App() {
             </ScrollView>
             <Text style={styles.meta}>セッション中（計測中/一時停止中）は切替不可</Text>
           </View>
+
+          {sessionState === 'idle' && restorableSnapshot ? (
+            <View style={styles.restoreCard}>
+              <Text style={styles.label}>復元可能なセッション</Text>
+              <Text style={styles.logicLine}>
+                {new Date(restorableSnapshot.startedAtMs).toLocaleString()} / {restorableSnapshot.distanceKm.toFixed(2)}km / {formatYen(restorableSnapshot.fareYen)}
+              </Text>
+              <View style={styles.pausedActionRow}>
+                <Pressable
+                  onPress={restoreFromSnapshot}
+                  style={({ pressed }) => [styles.button, styles.resumeButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.buttonText}>復元</Text>
+                </Pressable>
+                <Pressable
+                  onPress={discardRestorableSnapshot}
+                  style={({ pressed }) => [styles.button, styles.stopButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.buttonText}>破棄</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
 
           <View style={styles.logicCard}>
             <Text style={styles.label}>計算ロジック（{selectedPreset.label}）</Text>
@@ -682,6 +816,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   historyCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#374151',
+    backgroundColor: '#0b1220',
+    padding: 12,
+    gap: 8,
+  },
+  restoreCard: {
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#374151',
