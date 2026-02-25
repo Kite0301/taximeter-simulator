@@ -92,6 +92,7 @@ export default function App() {
   const [historyItems, setHistoryItems] = useState<DriveHistoryItem[]>([]);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [restorableSnapshot, setRestorableSnapshot] = useState<SessionSnapshot | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const watchSub = useRef<Location.LocationSubscription | null>(null);
@@ -532,31 +533,61 @@ export default function App() {
         </View>
 
         <ScrollView style={styles.rightPane} contentContainerStyle={styles.rightPaneContent}>
-          <View style={styles.presetCard}>
-            <Text style={styles.label}>料金プリセット</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetRow}>
-              {FARE_PRESETS.map((preset) => {
-                const active = selectedPresetId === preset.id;
-                return (
-                  <Pressable
-                    key={preset.id}
-                    onPress={() => handlePresetChange(preset.id)}
-                    disabled={!canChangePreset}
-                    style={({ pressed }) => [
-                      styles.presetButton,
-                      active && styles.presetButtonActive,
-                      pressed && styles.pressed,
-                    ]}
-                  >
-                    <Text style={[styles.presetText, active && styles.presetTextActive]}>
-                      {preset.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            <Text style={styles.meta}>セッション中（計測中/一時停止中）は切替不可</Text>
-          </View>
+          <Pressable
+            onPress={() => setSettingsOpen((prev) => !prev)}
+            style={({ pressed }) => [styles.settingsButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.settingsButtonText}>
+              {settingsOpen ? '設定を閉じる' : '料金設定を開く'}
+            </Text>
+          </Pressable>
+
+          {settingsOpen ? (
+            <View style={styles.presetCard}>
+              <Text style={styles.label}>料金プリセット</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetRow}>
+                {FARE_PRESETS.map((preset) => {
+                  const active = selectedPresetId === preset.id;
+                  return (
+                    <Pressable
+                      key={preset.id}
+                      onPress={() => handlePresetChange(preset.id)}
+                      disabled={!canChangePreset}
+                      style={({ pressed }) => [
+                        styles.presetButton,
+                        active && styles.presetButtonActive,
+                        pressed && styles.pressed,
+                      ]}
+                    >
+                      <Text style={[styles.presetText, active && styles.presetTextActive]}>
+                        {preset.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              <Text style={styles.meta}>セッション中（計測中/一時停止中）は切替不可</Text>
+
+              <View style={styles.logicCard}>
+                <Text style={styles.label}>計算ロジック（{selectedPreset.label}）</Text>
+                <Text style={styles.logicLine}>
+                  1. 時速 {selectedPreset.lowSpeedThresholdKmh}km 以下は時間加算
+                </Text>
+                <Text style={styles.logicLine}>
+                  2. それより速いと距離加算
+                </Text>
+                <Text style={styles.logicLine}>
+                  3. 距離: {Math.round(selectedPreset.distanceStepKm * 1000)}m ごとに +{selectedPreset.distanceStepFareYen}円
+                </Text>
+                <Text style={styles.logicLine}>
+                  4. 時間: {selectedPreset.lowSpeedStepSeconds}秒ごとに +{selectedPreset.lowSpeedStepFareYen}円
+                </Text>
+                <Text style={styles.logicLine}>
+                  5. ノイズ除外: accepted={acceptedSamples} / filtered={filteredSamples}
+                </Text>
+              </View>
+            </View>
+          ) : null}
 
           {sessionState === 'idle' && restorableSnapshot ? (
             <View style={styles.restoreCard}>
@@ -580,25 +611,6 @@ export default function App() {
               </View>
             </View>
           ) : null}
-
-          <View style={styles.logicCard}>
-            <Text style={styles.label}>計算ロジック（{selectedPreset.label}）</Text>
-            <Text style={styles.logicLine}>
-              1. 時速 {selectedPreset.lowSpeedThresholdKmh}km 以下は時間加算
-            </Text>
-            <Text style={styles.logicLine}>
-              2. それより速いと距離加算
-            </Text>
-            <Text style={styles.logicLine}>
-              3. 距離: {Math.round(selectedPreset.distanceStepKm * 1000)}m ごとに +{selectedPreset.distanceStepFareYen}円
-            </Text>
-            <Text style={styles.logicLine}>
-              4. 時間: {selectedPreset.lowSpeedStepSeconds}秒ごとに +{selectedPreset.lowSpeedStepFareYen}円
-            </Text>
-            <Text style={styles.logicLine}>
-              5. ノイズ除外: accepted={acceptedSamples} / filtered={filteredSamples}
-            </Text>
-          </View>
 
           {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
 
@@ -779,6 +791,20 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 8,
   },
+  settingsButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#0b1220',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  settingsButtonText: {
+    color: '#e2e8f0',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   presetRow: {
     gap: 8,
   },
@@ -810,6 +836,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0b1220',
     padding: 12,
     gap: 4,
+    marginTop: 4,
   },
   logicLine: {
     color: '#d1d5db',
