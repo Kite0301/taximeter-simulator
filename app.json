@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Taximeter Simulator",
+    "slug": "taximeter-simulator",
+    "version": "0.1.0",
+    "orientation": "landscape",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "package": "com.kaito.taximetersimulator",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "ios": {
+      "bundleIdentifier": "com.kaito.taximetersimulator",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "走行距離を計測してメーター料金を表示するために位置情報を使用します。"
+      }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "fd01c7bc-1801-4cd1-b101-7d8b15006d3d"
+      }
+    }
+  }
+}
