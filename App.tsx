@@ -99,7 +99,8 @@ export default function App() {
   const [restorableSnapshot, setRestorableSnapshot] = useState<SessionSnapshot | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [showDisclaimer, setShowDisclaimer] = useState(true);
-  const [locationProfile, setLocationProfile] = useState<LocationProfile>('high');
+  const [locationProfile, setLocationProfile] = useState<LocationProfile>('balanced');
+  const [profileSwitchCount, setProfileSwitchCount] = useState(0);
   const [autoPausedByBackground, setAutoPausedByBackground] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -116,7 +117,7 @@ export default function App() {
   const pauseLogsRef = useRef<PauseLog[]>([]);
   const pauseStartedAtRef = useRef<number | null>(null);
   const lastSnapshotSavedAtMsRef = useRef(0);
-  const locationProfileRef = useRef<LocationProfile>('high');
+  const locationProfileRef = useRef<LocationProfile>('balanced');
   const profileRestartingRef = useRef(false);
 
   const selectedPreset = useMemo(
@@ -209,7 +210,8 @@ export default function App() {
     setBillingMode('unknown');
     setAcceptedSamples(0);
     setFilteredSamples(0);
-    setLocationProfile('high');
+    setLocationProfile('balanced');
+    setProfileSwitchCount(0);
     setAutoPausedByBackground(false);
     fareRuntimeRef.current = createFareRuntime(preset);
     elapsedAccumulatedMsRef.current = 0;
@@ -219,7 +221,7 @@ export default function App() {
     sessionEventsRef.current = [];
     pauseLogsRef.current = [];
     pauseStartedAtRef.current = null;
-    locationProfileRef.current = 'high';
+    locationProfileRef.current = 'balanced';
     profileRestartingRef.current = false;
     lastPoint.current = null;
     lastSampleTimeMs.current = null;
@@ -344,6 +346,7 @@ export default function App() {
             desiredProfile !== locationProfileRef.current &&
             !profileRestartingRef.current
           ) {
+            setProfileSwitchCount((prev) => prev + 1);
             profileRestartingRef.current = true;
             void startLocationWatch(desiredProfile).finally(() => {
               profileRestartingRef.current = false;
@@ -471,7 +474,7 @@ export default function App() {
     setSessionState('running');
     setAutoPausedByBackground(false);
     startElapsedTimer();
-    await startLocationWatch();
+    await startLocationWatch('balanced');
     await persistSessionSnapshot('running');
   }
 
@@ -496,7 +499,7 @@ export default function App() {
     setSessionState('running');
     setAutoPausedByBackground(false);
     startElapsedTimer();
-    await startLocationWatch();
+    await startLocationWatch(locationProfileRef.current);
     await persistSessionSnapshot('running');
   }
 
@@ -677,6 +680,9 @@ export default function App() {
                 </Text>
                 <Text style={styles.logicLine}>
                   7. 省電力プロファイル: {locationProfile === 'high' ? '高精度' : '省電力'}
+                </Text>
+                <Text style={styles.logicLine}>
+                  8. プロファイル切替回数: {profileSwitchCount}
                 </Text>
               </View>
             </View>
