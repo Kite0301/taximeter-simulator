@@ -29,6 +29,37 @@ type SessionState = 'idle' | 'running' | 'paused';
 const LOCATION_UPDATE_INTERVAL_MS = 1000;
 const EDGE_PADDING = 16;
 const LANDSCAPE_SIDE_PADDING = 22;
+const MAX_REASONABLE_SPEED_KMH = 180;
+const POOR_ACCURACY_METERS = 80;
+const MAX_DISTANCE_FACTOR_KM_PER_SEC = (MAX_REASONABLE_SPEED_KMH / 3600) * 1.5;
+
+function getNoisySampleReason(params: {
+  deltaKm: number;
+  deltaSeconds: number;
+  speedKmh: number;
+  accuracyMeters: number | null;
+}): string | null {
+  const { deltaKm, deltaSeconds, speedKmh, accuracyMeters } = params;
+
+  if (!Number.isFinite(deltaKm) || !Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
+    return 'invalid_delta';
+  }
+
+  if (speedKmh > MAX_REASONABLE_SPEED_KMH) {
+    return 'speed_spike';
+  }
+
+  const dynamicDistanceCap = MAX_DISTANCE_FACTOR_KM_PER_SEC * deltaSeconds + 0.02;
+  if (deltaKm > dynamicDistanceCap) {
+    return 'distance_jump';
+  }
+
+  if (accuracyMeters !== null && accuracyMeters > POOR_ACCURACY_METERS && deltaKm > 0.03) {
+    return 'poor_accuracy_jump';
+  }
+
+  return null;
+}
 
 export default function App() {
   const [permission, setPermission] = useState<PermissionState>('unknown');
@@ -40,6 +71,8 @@ export default function App() {
   const [speedKmh, setSpeedKmh] = useState<number | null>(null);
   const [fareYen, setFareYen] = useState(DEFAULT_FARE_PRESET.baseFareYen);
   const [billingMode, setBillingMode] = useState<BillingMode>('unknown');
+  const [acceptedSamples, setAcceptedSamples] = useState(0);
+  const [filteredSamples, setFilteredSamples] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const watchSub = useRef<Location.LocationSubscription | null>(null);
@@ -86,6 +119,8 @@ export default function App() {
     setSpeedKmh(null);
     setFareYen(preset.baseFareYen);
     setBillingMode('unknown');
+    setAcceptedSamples(0);
+    setFilteredSamples(0);
     fareRuntimeRef.current = createFareRuntime(preset);
     elapsedAccumulatedMsRef.current = 0;
     runningSegmentStartMsRef.current = null;
@@ -141,6 +176,29 @@ export default function App() {
           const rawSpeedKmh = (loc.coords.speed ?? 0) * 3.6;
           const fallbackSpeedKmh = deltaSeconds > 0 ? (deltaKm / deltaSeconds) * 3600 : 0;
           const currentSpeedKmh = rawSpeedKmh > 0 ? rawSpeedKmh : fallbackSpeedKmh;
+          const noisySampleReason = getNoisySampleReason({
+            deltaKm,
+            deltaSeconds,
+            speedKmh: currentSpeedKmh,
+            accuracyMeters: loc.coords.accuracy ?? null,
+          });
+
+          if (noisySampleReason) {
+            setFilteredSamples((prev) => prev + 1);
+            setSpeedKmh(null);
+            setBillingMode('unknown');
+            console.debug('[gps-noise-filtered]', noisySampleReason, {
+              deltaKm,
+              deltaSeconds,
+              speedKmh: currentSpeedKmh,
+              accuracyMeters: loc.coords.accuracy ?? null,
+            });
+            lastPoint.current = nextPoint;
+            lastSampleTimeMs.current = loc.timestamp;
+            return;
+          }
+
+          setAcceptedSamples((prev) => prev + 1);
 
           if (deltaKm > 0) {
             setDistanceKm((prev) => prev + deltaKm);
@@ -308,6 +366,9 @@ export default function App() {
             </Text>
             <Text style={styles.logicLine}>
               4. 時間: {selectedPreset.lowSpeedStepSeconds}秒ごとに +{selectedPreset.lowSpeedStepFareYen}円
+            </Text>
+            <Text style={styles.logicLine}>
+              5. ノイズ除外: accepted={acceptedSamples} / filtered={filteredSamples}
             </Text>
           </View>
 
