@@ -36,6 +36,7 @@ export default function App() {
   const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [distanceKm, setDistanceKm] = useState(0);
+  const [speedKmh, setSpeedKmh] = useState<number | null>(null);
   const [fareYen, setFareYen] = useState(DEFAULT_FARE_PRESET.baseFareYen);
   const [billingMode, setBillingMode] = useState<BillingMode>('unknown');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -79,6 +80,7 @@ export default function App() {
     setStartedAtMs(null);
     setElapsedMs(0);
     setDistanceKm(0);
+    setSpeedKmh(null);
     setFareYen(preset.baseFareYen);
     setBillingMode('unknown');
     fareRuntimeRef.current = createFareRuntime(preset);
@@ -96,6 +98,7 @@ export default function App() {
       timerRef.current = null;
     }
     setRunning(false);
+    setSpeedKmh(null);
   }
 
   async function startSession() {
@@ -145,6 +148,7 @@ export default function App() {
 
           fareRuntimeRef.current = nextRuntime;
           setFareYen(nextRuntime.fareYen);
+          setSpeedKmh(speedKmh);
           setBillingMode(
             speedKmh <= selectedPreset.lowSpeedThresholdKmh ? 'time' : 'distance'
           );
@@ -186,6 +190,12 @@ export default function App() {
               <View style={styles.statBox}>
                 <Text style={styles.label}>DISTANCE</Text>
                 <Text style={styles.value}>{distanceKm.toFixed(2)} km</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={styles.label}>SPEED</Text>
+                <Text style={styles.value}>
+                  {speedKmh === null ? '-- km/h' : `${speedKmh.toFixed(1)} km/h`}
+                </Text>
               </View>
               <View style={styles.statBox}>
                 <Text style={styles.label}>MODE</Text>
